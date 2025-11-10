@@ -50,20 +50,20 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyD8QN41C8IzYTKZ_BxLnZHDiVAA9uL_e0U',
-    appId: '1:115110310383:web:21b5e6d9ef1b98d04cc61a',
-    messagingSenderId: '115110310383',
-    projectId: 'sleep-sync-94e9a',
-    authDomain: 'sleep-sync-94e9a.firebaseapp.com',
-    storageBucket: 'sleep-sync-94e9a.firebasestorage.app',
-    measurementId: 'G-HXH33K02R7',
+    apiKey: '',
+    appId: '',
+    messagingSenderId: '',
+    projectId: '',
+    authDomain: '',
+    storageBucket: '',
+    measurementId: '',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyBf912egG4aPBwLzkB4OYjZm2cPNEzO8YY',
-    appId: '1:115110310383:android:cf6d6b30d7e126b04cc61a',
-    messagingSenderId: '115110310383',
-    projectId: 'sleep-sync-94e9a',
-    storageBucket: 'sleep-sync-94e9a.firebasestorage.app',
+    apiKey: '',
+    appId: '',
+    messagingSenderId: '',
+    projectId: '',
+    storageBucket: '',
   );
 }
