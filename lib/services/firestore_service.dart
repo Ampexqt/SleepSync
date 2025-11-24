@@ -1,23 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../models/sleep_data.dart';
-import 'auth_service.dart';
 
 class FirestoreService {
-  final AuthService _authService;
-
-  FirestoreService(this._authService);
-
   FirebaseFirestore get _db => FirebaseFirestore.instance;
 
-  // Get current user ID
-  String get _userId {
-    final userId = _authService.userId;
-    if (userId == null) {
-      throw Exception('User not authenticated');
-    }
-    return userId;
-  }
+  // Use a fixed user document so the app does not depend on login
+  String get _userId => 'default_user';
 
   // Get user-specific collection reference
   CollectionReference<Map<String, dynamic>> _userCollection(String collection) {
@@ -38,7 +27,9 @@ class FirestoreService {
   }
 
   // Get reference to a specific date's session
-  DocumentReference<Map<String, dynamic>> _sessionDocForDate(String dateString) {
+  DocumentReference<Map<String, dynamic>> _sessionDocForDate(
+    String dateString,
+  ) {
     return _userCollection('daily_sleep_sessions').doc(dateString);
   }
 
@@ -70,10 +61,10 @@ class FirestoreService {
   // Returns a value between 0-100, where 100 means goal was achieved or exceeded
   int _calculateQualityPercent(int accumulatedMinutes, double goalHours) {
     if (goalHours <= 0) return 0;
-    
+
     final goalMinutes = (goalHours * 60).round();
     if (goalMinutes <= 0) return 0;
-    
+
     // Calculate percentage: (accumulated / goal) * 100
     // Cap at 100% if goal is exceeded
     final percent = (accumulatedMinutes / goalMinutes * 100).round();
@@ -84,7 +75,7 @@ class FirestoreService {
   Future<void> startSleep(DateTime start) async {
     final todayDoc = _todaySessionDoc();
     final doc = await todayDoc.get();
-    
+
     if (doc.exists) {
       // Session exists for today - resume it
       // IMPORTANT: Only update currentSleepStart, DO NOT touch accumulatedMinutes
@@ -100,20 +91,21 @@ class FirestoreService {
       final settings = await fetchSettings();
       final goalHours = settings?.goalHours ?? 8.0;
       final initialQuality = _calculateQualityPercent(0, goalHours);
-      
+
       await todayDoc.set({
         'date': _todayString,
         'firstBedtime': Timestamp.fromDate(start),
         'currentSleepStart': Timestamp.fromDate(start),
         'accumulatedMinutes': 0, // Start with 0, will accumulate as user sleeps
         'lastWakeTime': null,
-        'qualityPercent': initialQuality, // Start with 0% since no sleep accumulated yet
+        'qualityPercent':
+            initialQuality, // Start with 0% since no sleep accumulated yet
       });
     }
   }
 
   // Stop/pause sleep - accumulate time but keep session open for the day
-  // 
+  //
   // CRITICAL ACCUMULATION LOGIC:
   // - Each time sleep is stopped/paused, the elapsed time is ADDED to accumulatedMinutes
   // - accumulatedMinutes is NEVER reset or replaced during the same day
@@ -124,59 +116,64 @@ class FirestoreService {
   Future<SleepData?> stopSleep(DateTime stop) async {
     final todayDoc = _todaySessionDoc();
     final doc = await todayDoc.get();
-    
+
     if (!doc.exists) return null;
-    
+
     final data = doc.data()!;
     final currentSleepStart = data['currentSleepStart'] as Timestamp?;
-    
+
     if (currentSleepStart == null) {
       // Not currently sleeping, nothing to stop
       return null;
     }
-    
+
     // Calculate elapsed time for this sleep period
     final sleepStart = currentSleepStart.toDate();
     final elapsedDuration = stop.difference(sleepStart);
     // Calculate total seconds and convert to minutes (round up to nearest minute)
     // This ensures even short naps (less than 1 minute) are counted as at least 1 minute
     final elapsedSeconds = elapsedDuration.inSeconds;
-    final elapsedMinutes = elapsedSeconds > 0 
-        ? (elapsedSeconds / 60).ceil()  // Round up to nearest minute
+    final elapsedMinutes = elapsedSeconds > 0
+        ? (elapsedSeconds / 60)
+              .ceil() // Round up to nearest minute
         : 0;
-    
+
     if (elapsedMinutes <= 0) {
       // No time elapsed, just clear the current sleep start
-      await todayDoc.update({
-        'currentSleepStart': null,
-      });
+      await todayDoc.update({'currentSleepStart': null});
       return null;
     }
-    
+
     // Get existing accumulated time BEFORE updating (for return value calculation)
     final existingAccumulatedMinutes = (data['accumulatedMinutes'] ?? 0) as int;
-    
+
     // Calculate the new total after increment (for quality percent calculation)
     final newAccumulatedMinutes = existingAccumulatedMinutes + elapsedMinutes;
-    
+
     // Get current goal hours to calculate accurate quality percent
     final settings = await fetchSettings();
     final goalHours = settings?.goalHours ?? 8.0;
-    
+
     // Calculate quality percent based on accumulated minutes vs goal
-    final qualityPercent = _calculateQualityPercent(newAccumulatedMinutes, goalHours);
-    
+    final qualityPercent = _calculateQualityPercent(
+      newAccumulatedMinutes,
+      goalHours,
+    );
+
     // CRITICAL: Use FieldValue.increment() for atomic addition
     // This ensures that accumulatedMinutes is ADDED to, not replaced
     // Even if multiple stop operations happen quickly, they will all be accumulated correctly
     // Also update quality percent to reflect the new accumulated total
     await todayDoc.update({
-      'accumulatedMinutes': FieldValue.increment(elapsedMinutes), // ADD to existing value
+      'accumulatedMinutes': FieldValue.increment(
+        elapsedMinutes,
+      ), // ADD to existing value
       'currentSleepStart': null, // Clear active sleep so user can resume later
       'lastWakeTime': Timestamp.fromDate(stop),
-      'qualityPercent': qualityPercent, // Update quality based on goal achievement
+      'qualityPercent':
+          qualityPercent, // Update quality based on goal achievement
     });
-    
+
     // Return the session data for today with updated accumulated time and quality
     final firstBedtime = (data['firstBedtime'] as Timestamp).toDate();
     return SleepData(
@@ -192,11 +189,11 @@ class FirestoreService {
     final now = DateTime.now();
     final yesterday = DateTime(now.year, now.month, now.day - 1);
     final yesterdayString = _getDateString(yesterday);
-    
+
     // Get current goal hours to calculate accurate quality percent
     final settings = await fetchSettings();
     final goalHours = settings?.goalHours ?? 8.0;
-    
+
     // Try to get yesterday's session
     final yesterdayDoc = await _sessionDocForDate(yesterdayString).get();
     if (yesterdayDoc.exists) {
@@ -204,15 +201,19 @@ class FirestoreService {
       final firstBedtime = (data['firstBedtime'] as Timestamp).toDate();
       final lastWakeTime = data['lastWakeTime'] as Timestamp?;
       final accumulatedMinutes = (data['accumulatedMinutes'] ?? 0) as int;
-      
+
       // If there's no lastWakeTime but there's accumulated time, use firstBedtime + accumulated
-      final wakeTime = lastWakeTime?.toDate() ?? 
+      final wakeTime =
+          lastWakeTime?.toDate() ??
           firstBedtime.add(Duration(minutes: accumulatedMinutes));
-      
+
       // Calculate quality percent based on accumulated minutes vs goal
       // Always recalculate to ensure accuracy - this reflects whether the goal was achieved
-      final qualityPercent = _calculateQualityPercent(accumulatedMinutes, goalHours);
-      
+      final qualityPercent = _calculateQualityPercent(
+        accumulatedMinutes,
+        goalHours,
+      );
+
       return SleepData(
         duration: Duration(minutes: accumulatedMinutes),
         qualityPercent: qualityPercent,
@@ -220,26 +221,29 @@ class FirestoreService {
         wakeTime: wakeTime,
       );
     }
-    
+
     // Fallback: Check recent dates manually (up to 30 days back)
     for (int i = 2; i <= 30; i++) {
       final date = DateTime(now.year, now.month, now.day - i);
       final dateString = _getDateString(date);
       final doc = await _sessionDocForDate(dateString).get();
-      
+
       if (doc.exists) {
         final data = doc.data()!;
         final lastWakeTime = data['lastWakeTime'] as Timestamp?;
-        
+
         // Only return sessions that have been completed (have a lastWakeTime)
         if (lastWakeTime != null) {
           final firstBedtime = (data['firstBedtime'] as Timestamp).toDate();
           final accumulatedMinutes = (data['accumulatedMinutes'] ?? 0) as int;
-          
+
           // Calculate quality percent based on accumulated minutes vs goal
           // Always recalculate to ensure accuracy
-          final qualityPercent = _calculateQualityPercent(accumulatedMinutes, goalHours);
-          
+          final qualityPercent = _calculateQualityPercent(
+            accumulatedMinutes,
+            goalHours,
+          );
+
           return SleepData(
             duration: Duration(minutes: accumulatedMinutes),
             qualityPercent: qualityPercent,
@@ -249,7 +253,7 @@ class FirestoreService {
         }
       }
     }
-    
+
     return null;
   }
 
@@ -258,51 +262,53 @@ class FirestoreService {
   Future<List<SleepData?>> fetchLast7Sessions() async {
     final now = DateTime.now();
     final sessions = <SleepData?>[];
-    
+
     // Get current goal hours to calculate accurate quality percent
     final settings = await fetchSettings();
     final goalHours = settings?.goalHours ?? 8.0;
-    
+
     // Get sessions for the last 7 days (excluding today), from oldest to newest
     for (int i = 7; i >= 1; i--) {
       final date = DateTime(now.year, now.month, now.day - i);
       final dateString = _getDateString(date);
       final doc = await _sessionDocForDate(dateString).get();
-      
+
       if (doc.exists) {
         final data = doc.data()!;
         final lastWakeTime = data['lastWakeTime'] as Timestamp?;
-        
+
         // Only include completed sessions (have lastWakeTime)
         if (lastWakeTime != null) {
           final firstBedtime = (data['firstBedtime'] as Timestamp).toDate();
           final accumulatedMinutes = (data['accumulatedMinutes'] ?? 0) as int;
-          
+
           // Calculate quality percent based on accumulated minutes vs goal
           // Always recalculate to ensure accuracy
-          final qualityPercent = _calculateQualityPercent(accumulatedMinutes, goalHours);
-          
-          sessions.add(SleepData(
-            duration: Duration(minutes: accumulatedMinutes),
-            qualityPercent: qualityPercent,
-            bedtime: firstBedtime,
-            wakeTime: lastWakeTime.toDate(),
-          ));
+          final qualityPercent = _calculateQualityPercent(
+            accumulatedMinutes,
+            goalHours,
+          );
+
+          sessions.add(
+            SleepData(
+              duration: Duration(minutes: accumulatedMinutes),
+              qualityPercent: qualityPercent,
+              bedtime: firstBedtime,
+              wakeTime: lastWakeTime.toDate(),
+            ),
+          );
           continue;
         }
       }
       // No data for this day
       sessions.add(null);
     }
-    
+
     return sessions;
   }
 
   Stream<UserSettingsState> streamSettings() {
-    return _userCollection('settings')
-        .doc('default')
-        .snapshots()
-        .map((doc) {
+    return _userCollection('settings').doc('default').snapshots().map((doc) {
       if (!doc.exists) {
         return UserSettingsState(
           goalHours: 8,
@@ -348,13 +354,16 @@ class FirestoreService {
     final yesterdayString = _getDateString(yesterday);
     final bedtime = DateTime(now.year, now.month, now.day - 1, 23, 30);
     final wake = DateTime(now.year, now.month, now.day, 6, 45);
-    
+
     // Get current goal to calculate accurate quality percent
     final settings = await fetchSettings();
     final goalHours = settings?.goalHours ?? 8.0;
     final accumulatedMinutes = 7 * 60 + 15; // 7 hours 15 minutes
-    final qualityPercent = _calculateQualityPercent(accumulatedMinutes, goalHours);
-    
+    final qualityPercent = _calculateQualityPercent(
+      accumulatedMinutes,
+      goalHours,
+    );
+
     // Create a sample session for yesterday
     await _sessionDocForDate(yesterdayString).set({
       'date': yesterdayString,
@@ -367,21 +376,6 @@ class FirestoreService {
   }
 
   // Helpers
-  SleepData _toSleepData(Map<String, dynamic> data) {
-    final bedtime = (data['bedtime'] as Timestamp).toDate();
-    final wake = (data['wakeTime'] as Timestamp).toDate();
-    final durationMinutes = data['durationMinutes'] as int?;
-    final duration = durationMinutes != null
-        ? Duration(minutes: durationMinutes)
-        : wake.difference(bedtime);
-    return SleepData(
-      duration: duration,
-      qualityPercent: (data['qualityPercent'] ?? 80) as int,
-      bedtime: bedtime,
-      wakeTime: wake,
-    );
-  }
-
   TimeOfDay _toTimeOfDay(Map<String, dynamic>? map) {
     final h = (map?['h'] ?? 23) as int;
     final m = (map?['m'] ?? 30) as int;
@@ -409,7 +403,8 @@ class UserSettingsState {
   }) {
     return UserSettingsState(
       goalHours: goalHours ?? this.goalHours,
-      bedtimeReminderEnabled: bedtimeReminderEnabled ?? this.bedtimeReminderEnabled,
+      bedtimeReminderEnabled:
+          bedtimeReminderEnabled ?? this.bedtimeReminderEnabled,
       bedtime: bedtime ?? this.bedtime,
       wakeTime: wakeTime ?? this.wakeTime,
     );
