@@ -4,16 +4,14 @@ import 'firebase_options.dart';
 import 'screens/home_screen.dart';
 import 'screens/weekly_screen.dart';
 import 'screens/settings_screen.dart';
-import 'screens/login_screen.dart';
+import 'screens/splash_screen.dart';
 import 'utils/constants.dart';
 import 'widgets/custom_bottom_nav.dart';
-import 'services/auth_service.dart';
+import 'services/local_storage_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const SleepSyncApp());
 }
 
@@ -31,7 +29,6 @@ class SleepSyncApp extends StatelessWidget {
         colorScheme: const ColorScheme.dark(
           primary: AppColors.primary,
           surface: AppColors.card,
-          background: AppColors.background,
         ),
         textTheme: const TextTheme(
           headlineMedium: TextStyle(
@@ -46,20 +43,20 @@ class SleepSyncApp extends StatelessWidget {
           bodySmall: TextStyle(color: AppColors.textTertiary),
         ),
       ),
-      home: const AuthWrapper(),
+      home: const AppInitializer(),
     );
   }
 }
 
-class AuthWrapper extends StatefulWidget {
-  const AuthWrapper({super.key});
+class AppInitializer extends StatefulWidget {
+  const AppInitializer({super.key});
 
   @override
-  State<AuthWrapper> createState() => _AuthWrapperState();
+  State<AppInitializer> createState() => _AppInitializerState();
 }
 
-class _AuthWrapperState extends State<AuthWrapper> {
-  final AuthService _authService = AuthService();
+class _AppInitializerState extends State<AppInitializer> {
+  final LocalStorageService _localStorage = LocalStorageService();
   bool _isInitialized = false;
 
   @override
@@ -69,7 +66,21 @@ class _AuthWrapperState extends State<AuthWrapper> {
   }
 
   Future<void> _initialize() async {
-    await _authService.initialize();
+    // Show splash screen for at least 2.5 seconds
+    final initStart = DateTime.now();
+
+    // Initialize storage
+    await _localStorage.init();
+
+    // Calculate elapsed time
+    final elapsed = DateTime.now().difference(initStart);
+    final minDelay = const Duration(seconds: 2, milliseconds: 500);
+
+    // Wait for remaining time if initialization was too fast
+    if (elapsed < minDelay) {
+      await Future.delayed(minDelay - elapsed);
+    }
+
     if (mounted) {
       setState(() {
         _isInitialized = true;
@@ -77,42 +88,19 @@ class _AuthWrapperState extends State<AuthWrapper> {
     }
   }
 
-  void _onAuthChanged() {
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!_isInitialized) {
-      return const Scaffold(
-        body: Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
+      return const SplashScreen();
     }
 
-    // If user is logged in, show main app
-    if (_authService.currentUser != null) {
-      return _Root(
-        authService: _authService,
-        onSignOut: _onAuthChanged,
-      );
-    }
-
-    // If user is not logged in, show login screen
-    return LoginScreen(
-      authService: _authService,
-      onAuthChanged: _onAuthChanged,
-    );
+    return _Root(localStorage: _localStorage);
   }
 }
 
 class _Root extends StatefulWidget {
-  final AuthService authService;
-  final VoidCallback onSignOut;
-  const _Root({required this.authService, required this.onSignOut});
+  final LocalStorageService localStorage;
+  const _Root({required this.localStorage});
 
   @override
   State<_Root> createState() => _RootState();
@@ -126,14 +114,10 @@ class _RootState extends State<_Root> {
   @override
   void initState() {
     super.initState();
-    final authService = widget.authService;
     _pages = [
-      HomeScreen(authService: authService),
-      WeeklyScreen(authService: authService),
-      SettingsScreen(
-        authService: authService,
-        onSignOut: widget.onSignOut,
-      ),
+      HomeScreen(localStorage: widget.localStorage),
+      WeeklyScreen(localStorage: widget.localStorage),
+      SettingsScreen(localStorage: widget.localStorage),
     ];
   }
 

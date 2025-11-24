@@ -3,25 +3,26 @@ import 'package:flutter/material.dart';
 import '../utils/constants.dart';
 import '../widgets/goal_tracker.dart';
 import '../widgets/sleep_card.dart';
-import '../services/firestore_service.dart';
-import '../services/auth_service.dart';
+import '../services/local_storage_service.dart';
 import '../widgets/premium_toast.dart';
+import '../models/user_settings.dart';
 
 class HomeScreen extends StatefulWidget {
-  final AuthService authService;
-  const HomeScreen({super.key, required this.authService});
+  final LocalStorageService localStorage;
+  const HomeScreen({super.key, required this.localStorage});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  late final FirestoreService service;
+  late final LocalStorageService service;
   late Future _future;
   DateTime? _activeStart;
-  int _accumulatedMinutes = 0; // Accumulated sleep time from previous periods today
+  int _accumulatedMinutes =
+      0; // Accumulated sleep time from previous periods today
   StreamSubscription<DateTime?>? _activeSub;
-  StreamSubscription<UserSettingsState>? _settingsSub;
+  StreamSubscription<UserSettings>? _settingsSub;
   Timer? _ticker;
   String _elapsedLabel = '';
   double _goalHours = 8;
@@ -29,10 +30,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    service = FirestoreService(widget.authService);
+    service = widget.localStorage;
     _future = service.fetchLastNight();
     _loadInitialSettings();
     _loadAccumulatedTime();
+    _loadActiveStart();
     _activeSub = service.streamActiveStart().listen((start) {
       if (!mounted) return;
       setState(() => _activeStart = start);
@@ -46,9 +48,17 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  void _loadActiveStart() {
+    final activeStart = service.getActiveStart();
+    if (mounted) {
+      setState(() => _activeStart = activeStart);
+      _updateTicker();
+    }
+  }
+
   Future<void> _loadInitialSettings() async {
-    final settings = await service.fetchSettings();
-    if (settings != null && mounted) {
+    final settings = service.getSettings();
+    if (mounted) {
       setState(() => _goalHours = settings.goalHours);
     }
   }
@@ -78,23 +88,23 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       return;
     }
-    
+
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       // Calculate current sleep period duration in seconds for accuracy
       final currentPeriodDiff = DateTime.now().difference(_activeStart!);
       final currentPeriodSeconds = currentPeriodDiff.inSeconds;
-      // Convert to minutes (round up to match server-side calculation)
-      final currentPeriodMinutes = currentPeriodSeconds > 0 
+      // Convert to minutes (round up to match calculation)
+      final currentPeriodMinutes = currentPeriodSeconds > 0
           ? (currentPeriodSeconds / 60).ceil()
           : 0;
-      
+
       // Total sleep time = accumulated (from previous periods) + current period
       // This ensures all sleep periods in the day are added together
       final totalMinutes = _accumulatedMinutes + currentPeriodMinutes;
       final h = totalMinutes ~/ 60;
       final m = totalMinutes % 60;
-      
+
       setState(() => _elapsedLabel = '${h}h ${m}m');
     });
   }
@@ -105,19 +115,20 @@ class _HomeScreenState extends State<HomeScreen> {
       // IMPORTANT: Reload accumulated time FIRST to ensure we have the latest total
       // This ensures that if the user paused and is resuming, we have the correct accumulated time
       await _loadAccumulatedTime();
-      
+
       final optimisticStart = DateTime.now();
       if (mounted) setState(() => _activeStart = optimisticStart);
       _updateTicker();
       try {
         await service.startSleep(optimisticStart);
-        // Reload again after starting to sync with Firestore
+        // Reload again after starting to sync
         await _loadAccumulatedTime();
         if (!mounted) return;
         final totalMinutes = _accumulatedMinutes;
         showPremiumToast(
           context,
-          message: 'Sleep started. Total today: ${totalMinutes ~/ 60}h ${totalMinutes % 60}m',
+          message:
+              'Sleep started. Total today: ${totalMinutes ~/ 60}h ${totalMinutes % 60}m',
           type: ToastType.success,
           icon: Icons.nightlight_round,
           duration: const Duration(seconds: 2),
@@ -137,12 +148,13 @@ class _HomeScreenState extends State<HomeScreen> {
       // Stopping/pausing sleep - accumulate time but keep session open
       final optimisticStop = DateTime.now();
       final prev = _activeStart;
-      final prevAccumulated = _accumulatedMinutes; // Store previous accumulated time
+      final prevAccumulated =
+          _accumulatedMinutes; // Store previous accumulated time
       if (mounted) setState(() => _activeStart = null);
       _updateTicker();
       try {
         await service.stopSleep(optimisticStop);
-        // CRITICAL: Reload accumulated time from Firestore after stopping
+        // CRITICAL: Reload accumulated time after stopping
         // This ensures we have the latest accumulated total that includes this sleep period
         await _loadAccumulatedTime();
         if (mounted) {
@@ -154,7 +166,8 @@ class _HomeScreenState extends State<HomeScreen> {
           final addedMinutes = currentAccumulated - prevAccumulated;
           showPremiumToast(
             context,
-            message: 'Sleep paused. Total today: ${currentAccumulated ~/ 60}h ${currentAccumulated % 60}m (+${addedMinutes}m)',
+            message:
+                'Sleep paused. Total today: ${currentAccumulated ~/ 60}h ${currentAccumulated % 60}m (+${addedMinutes}m)',
             type: ToastType.info,
             icon: Icons.pause_circle_outline_rounded,
             duration: const Duration(seconds: 2),
@@ -164,7 +177,8 @@ class _HomeScreenState extends State<HomeScreen> {
         if (mounted) {
           setState(() {
             _activeStart = prev;
-            _accumulatedMinutes = prevAccumulated; // Restore previous accumulated time
+            _accumulatedMinutes =
+                prevAccumulated; // Restore previous accumulated time
           });
         }
         _updateTicker();
@@ -202,7 +216,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      Icon(Icons.nightlight_round, color: AppColors.primary, size: 30),
+                      Icon(
+                        Icons.nightlight_round,
+                        color: AppColors.primary,
+                        size: 30,
+                      ),
                       Positioned(
                         top: 6,
                         right: 8,

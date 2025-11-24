@@ -1,17 +1,16 @@
 import 'package:flutter/material.dart';
 import '../utils/constants.dart';
-import '../services/firestore_service.dart';
-import '../services/auth_service.dart';
+import '../services/local_storage_service.dart';
 import '../widgets/sleep_chart.dart';
 import '../models/sleep_data.dart';
 
 class WeeklyScreen extends StatelessWidget {
-  final AuthService authService;
-  const WeeklyScreen({super.key, required this.authService});
+  final LocalStorageService localStorage;
+  const WeeklyScreen({super.key, required this.localStorage});
 
   @override
   Widget build(BuildContext context) {
-    final service = FirestoreService(authService);
+    final service = localStorage;
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -31,10 +30,7 @@ class WeeklyScreen extends StatelessWidget {
             const SizedBox(height: 4),
             const Text(
               'Your sleep patterns for the past 7 days',
-              style: TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: 14,
-              ),
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
             ),
             const SizedBox(height: 24),
             // Chart and stats
@@ -51,10 +47,13 @@ class WeeklyScreen extends StatelessWidget {
                 }
 
                 final sessions = snapshot.data ?? List.filled(7, null);
-                
+
                 // Calculate statistics from sessions with data
-                final sessionsWithData = sessions.where((s) => s != null).cast<SleepData>().toList();
-                
+                final sessionsWithData = sessions
+                    .where((s) => s != null)
+                    .cast<SleepData>()
+                    .toList();
+
                 // Always show chart, even if no data
                 return Column(
                   children: [
@@ -87,7 +86,8 @@ class WeeklyScreen extends StatelessWidget {
         .map((s) => s.duration.inMinutes)
         .fold<int>(0, (a, b) => a + b);
     final avgMinutes = totalMinutes / sessions.length;
-    final avgDuration = '${(avgMinutes ~/ 60).round()}h ${(avgMinutes % 60).round()}m';
+    final avgDuration =
+        '${(avgMinutes ~/ 60).round()}h ${(avgMinutes % 60).round()}m';
 
     // Calculate average bedtime (median for better representation)
     final bedtimes = sessions.map((s) => s.bedtime).toList();

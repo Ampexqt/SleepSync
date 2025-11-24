@@ -6,87 +6,194 @@ class SleepChart extends StatelessWidget {
   final List<SleepData?> sessions; // 7 items, null for days without data
   const SleepChart({super.key, required this.sessions});
 
-  // Convert time to chart position (0.0 = 6 PM bottom, 1.0 = 6 AM top)
+  // Convert time to chart position (0.0 = 6 PM left, 1.0 = 6 AM right)
   // Chart represents 12 hours: 6 PM (18:00) to 6 AM next day (06:00)
-  double _timeToPosition(DateTime time, {required bool isBedtime}) {
+  // For vertical chart: left = 6 PM, right = 6 AM next day
+  double _timeToPosition(DateTime time) {
     final hour = time.hour;
     final minute = time.minute;
-    final minutesOfDay = hour * 60 + minute;
-    
-    // 6 PM = 1080 minutes, 6 AM next = 360 minutes (next day)
-    // Chart window: 1080 to 1440+360 (6 PM to 6 AM next)
-    
+    final totalMinutes = hour * 60 + minute;
+
+    // Calculate minutes from 6 PM (18:00 = 1080 minutes)
     int minutesFrom6PM;
     if (hour >= 18) {
       // Evening: 6 PM to midnight (0 to 360 minutes from 6 PM)
-      minutesFrom6PM = minutesOfDay - 1080;
+      minutesFrom6PM = totalMinutes - 1080;
     } else if (hour < 6) {
       // Early morning next day: midnight to 6 AM (360 to 720 minutes from 6 PM)
-      minutesFrom6PM = (1440 - 1080) + minutesOfDay;
+      minutesFrom6PM =
+          360 + totalMinutes; // 360 (midnight-6PM) + minutes from midnight
     } else {
-      // Daytime (6 AM to 6 PM) - shouldn't happen for sleep, but handle it
-      // Treat as if it's the next cycle
-      minutesFrom6PM = (1440 - 1080) + minutesOfDay;
+      // Daytime (6 AM to 6 PM) - for sleep tracking, this means wake time after 6 AM
+      // Calculate actual position: 6 AM = 720 minutes, so 7 AM = 780 minutes, etc.
+      // This allows accurate positioning even if wake time is after 6 AM
+      minutesFrom6PM =
+          360 +
+          (6 * 60) +
+          (totalMinutes -
+              (6 * 60)); // 360 (midnight-6PM) + 360 (6PM-6AM) + extra
+      // Simplified: 720 + (totalMinutes - 360) = 360 + totalMinutes
+      minutesFrom6PM = 360 + totalMinutes;
     }
-    
+
     // Chart is 12 hours = 720 minutes
-    // Position from bottom: 0.0 = 6 PM, 1.0 = 6 AM
+    // Position from left: 0.0 = 6 PM, 1.0 = 6 AM next day
+    // Clamp to 1.0 max to keep within chart bounds
     return (minutesFrom6PM / 720.0).clamp(0.0, 1.0);
   }
 
-  // Get bar position and height for a sleep session
+  // Get bar position and height for a sleep session (for vertical bars)
   Map<String, double> _getBarMetrics(SleepData? session) {
     if (session == null) {
-      return {'bottom': 0.0, 'height': 0.0};
+      return {'top': 0.0, 'height': 0.0};
     }
 
-    // Calculate bedtime position
-    final bedtimePos = _timeToPosition(session.bedtime, isBedtime: true);
-    
-    // Calculate wake time position
-    var wakePos = _timeToPosition(session.wakeTime, isBedtime: false);
-    
+    // Calculate bedtime position (top edge of bar)
+    // For vertical bars: 0.0 = top (6 PM), 1.0 = bottom (6 AM)
+    final bedtimePos = _timeToPosition(session.bedtime);
+
+    // Calculate wake time position (bottom edge of bar)
+    var wakePos = _timeToPosition(session.wakeTime);
+
+    // Handle case where wake time is next day (wakePos might be less than bedtimePos)
     // If wake time appears before bedtime, it means wake is next day
-    // In this case, wake should be after bedtime on the chart
-    if (wakePos <= bedtimePos) {
-      // Wake is next day - ensure it's positioned after bedtime
-      // Use the actual duration to calculate height
+    if (wakePos < bedtimePos) {
+      // Wake is next day - calculate based on duration
       final durationHours = session.duration.inMinutes / 60.0;
       final heightFromDuration = (durationHours / 12.0).clamp(0.05, 1.0);
-      
-      // Calculate wake position based on bedtime + duration
       wakePos = (bedtimePos + heightFromDuration).clamp(0.0, 1.0);
     }
-    
+
     // Calculate height from positions
     double height = wakePos - bedtimePos;
-    
+
     // Ensure minimum height for visibility
     if (height < 0.05 && session.duration.inMinutes > 30) {
       // Use duration-based height if position-based is too small
       final durationHours = session.duration.inMinutes / 60.0;
       height = (durationHours / 12.0).clamp(0.05, 1.0);
     }
-    
+
     // Clamp height
     height = height.clamp(0.05, 1.0);
-    
+
     // Ensure bar doesn't go beyond chart
-    final maxBottom = 1.0 - height;
-    final bottom = bedtimePos.clamp(0.0, maxBottom);
-    
-    return {
-      'bottom': bottom,
-      'height': height,
-    };
+    final maxTop = 1.0 - height;
+    final top = bedtimePos.clamp(0.0, maxTop);
+
+    return {'top': top, 'height': height};
+  }
+
+  // Format time for display
+  String _formatTime(DateTime dt) {
+    final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final m = dt.minute.toString().padLeft(2, '0');
+    final p = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$h:$m $p';
+  }
+
+  // Format duration for display
+  String _formatDuration(Duration duration) {
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes % 60;
+    return '${hours}h ${minutes}m';
+  }
+
+  // Show details dialog when bar is tapped
+  void _showSleepDetails(
+    BuildContext context,
+    SleepData session,
+    String dayLabel,
+  ) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          dayLabel,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.bold,
+            fontSize: 20,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _DetailRow(
+              icon: Icons.bedtime,
+              label: 'Bedtime',
+              value: _formatTime(session.bedtime),
+            ),
+            const SizedBox(height: 16),
+            _DetailRow(
+              icon: Icons.wb_sunny,
+              label: 'Wake Time',
+              value: _formatTime(session.wakeTime),
+            ),
+            const SizedBox(height: 16),
+            _DetailRow(
+              icon: Icons.access_time,
+              label: 'Duration',
+              value: _formatDuration(session.duration),
+            ),
+            const SizedBox(height: 16),
+            _DetailRow(
+              icon: Icons.star,
+              label: 'Quality',
+              value: '${session.qualityPercent}%',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text(
+              'Close',
+              style: TextStyle(color: AppColors.primary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Reorder sessions so Monday is first
+  List<SleepData?> _reorderSessionsForMondayFirst() {
+    if (sessions.isEmpty) return List.filled(7, null);
+
+    // Find the weekday of the first (oldest) session
+    final now = DateTime.now();
+    final firstDayDate = DateTime(now.year, now.month, now.day - 7);
+    final firstDayWeekday = firstDayDate.weekday; // 1 = Monday, 7 = Sunday
+
+    // Calculate how many positions to rotate (to make Monday index 0)
+    // If firstDayWeekday is 1 (Monday), rotation is 0
+    // If firstDayWeekday is 2 (Tuesday), rotation is 6 (move to end)
+    // If firstDayWeekday is 7 (Sunday), rotation is 1 (move to end)
+    final rotation = (1 - firstDayWeekday) % 7;
+
+    // Create reordered list
+    final reordered = List<SleepData?>.filled(7, null);
+    for (int i = 0; i < 7; i++) {
+      final newIndex = (i + rotation) % 7;
+      reordered[newIndex] = sessions[i];
+    }
+
+    return reordered;
   }
 
   @override
   Widget build(BuildContext context) {
-    // Y-axis labels (from top to bottom: 6 AM, 2 AM, 10 PM, 6 PM)
-    // Positions: 6 AM (top, 1.0), 2 AM (0.667), 10 PM (0.333), 6 PM (bottom, 0.0)
-    final yAxisLabels = ['6 AM', '2 AM', '10 PM', '6 PM'];
-    final yAxisPositions = [1.0, 0.667, 0.333, 0.0]; // Chart positions (1.0 = top/6 AM, 0.0 = bottom/6 PM)
+    // Reorder sessions so Monday is first
+    final reorderedSessions = _reorderSessionsForMondayFirst();
+
+    // Y-axis labels (from top to bottom: 6 PM, 10 PM, 2 AM, 6 AM)
+    // Positions: 6 PM (top, 0.0), 10 PM (0.333), 2 AM (0.667), 6 AM (bottom, 1.0)
+    final yAxisLabels = ['6 PM', '10 PM', '2 AM', '6 AM'];
+    final yAxisPositions = [0.0, 0.333, 0.667, 1.0];
 
     return Container(
       decoration: BoxDecoration(
@@ -115,65 +222,113 @@ class SleepChart extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 20),
-          // Chart area
-          SizedBox(
-            height: 220,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Y-axis with time labels
-                SizedBox(
-                  width: 50,
-                  child: Stack(
-                    children: yAxisLabels.asMap().entries.map((entry) {
-                      final index = entry.key;
-                      final label = entry.value;
-                      final position = yAxisPositions[index];
-                      // Position: 1.0 = top (6 AM), 0.0 = bottom (6 PM)
-                      // Chart height is 220, so position 1.0 = top (y=0), position 0.0 = bottom (y=220)
-                      final yPosition = (1.0 - position) * 220 - 8; // -8 for text height adjustment
-                      return Positioned(
-                        top: yPosition.clamp(0.0, 212.0),
-                        left: 0,
-                        child: SizedBox(
-                          width: 50,
-                          child: Text(
-                            label,
-                            style: const TextStyle(
-                              color: AppColors.textPrimary,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
+          // Chart area - horizontal layout with vertical bars
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final chartHeight = 280.0; // Height for vertical bars
+              return SizedBox(
+                height: chartHeight + 50, // Add space for day labels at bottom
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Time labels column (Y-axis) on the left
+                    SizedBox(
+                      width: 50,
+                      child: Stack(
+                        children: yAxisLabels.asMap().entries.map((entry) {
+                          final index = entry.key;
+                          final label = entry.value;
+                          final position = yAxisPositions[index];
+                          // Position: 0.0 = top (6 PM), 1.0 = bottom (6 AM)
+                          final yPosition =
+                              (1.0 - position) * chartHeight -
+                              8; // -8 for text height adjustment
+                          return Positioned(
+                            top: yPosition.clamp(0.0, chartHeight - 16),
+                            left: 0,
+                            child: SizedBox(
+                              width: 50,
+                              child: Text(
+                                label,
+                                style: const TextStyle(
+                                  color: AppColors.textPrimary,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // Bars area with day labels
+                    Expanded(
+                      child: Column(
+                        children: [
+                          // Bars area
+                          Expanded(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: List.generate(7, (index) {
+                                final session = index < reorderedSessions.length
+                                    ? reorderedSessions[index]
+                                    : null;
+                                final metrics = _getBarMetrics(session);
+                                final isHighQuality =
+                                    session != null &&
+                                    session.qualityPercent >= 70;
+                                final dayLabel = _getDayLabel(index);
+
+                                return Expanded(
+                                  child: _Bar(
+                                    top: metrics['top']!,
+                                    height: metrics['height']!,
+                                    hasData: session != null,
+                                    isHighQuality: isHighQuality,
+                                    chartHeight: chartHeight,
+                                    onTap: session != null
+                                        ? () => _showSleepDetails(
+                                            context,
+                                            session,
+                                            dayLabel,
+                                          )
+                                        : null,
+                                  ),
+                                );
+                              }),
                             ),
                           ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
+                          const SizedBox(height: 12),
+                          // Day labels at bottom
+                          SizedBox(
+                            height: 30,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: List.generate(7, (index) {
+                                final dayLabel = _getDayLabel(index);
+                                return Expanded(
+                                  child: Text(
+                                    dayLabel,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: AppColors.textPrimary,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                );
+                              }),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                // Bars area
-                Expanded(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: List.generate(7, (index) {
-                      final session = index < sessions.length ? sessions[index] : null;
-                      final metrics = _getBarMetrics(session);
-                      final isHighQuality = session != null && session.qualityPercent >= 70;
-                      final dayLabel = _getDayLabel(index);
-                      
-                      return _Bar(
-                        label: dayLabel,
-                        bottom: metrics['bottom']!,
-                        height: metrics['height']!,
-                        hasData: session != null,
-                        isHighQuality: isHighQuality,
-                      );
-                    }),
-                  ),
-                ),
-              ],
-            ),
+              );
+            },
           ),
         ],
       ),
@@ -181,98 +336,129 @@ class SleepChart extends StatelessWidget {
   }
 
   String _getDayLabel(int index) {
-    final now = DateTime.now();
-    final targetDate = DateTime(now.year, now.month, now.day - (7 - index));
-    final weekday = targetDate.weekday; // 1 = Monday, 7 = Sunday
+    // Always return Monday-Sunday in order (index 0 = Monday, index 6 = Sunday)
     const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    return labels[weekday - 1];
+    return labels[index];
   }
 }
 
 class _Bar extends StatelessWidget {
-  final String label;
-  final double bottom; // 0.0 to 1.0 (0.0 = 6 PM bottom, 1.0 = 6 AM top)
+  final double top; // 0.0 to 1.0 (0.0 = top/6 PM, 1.0 = bottom/6 AM)
   final double height; // 0.0 to 1.0
   final bool hasData;
   final bool isHighQuality;
+  final double chartHeight;
+  final VoidCallback? onTap;
 
   const _Bar({
-    required this.label,
-    required this.bottom,
+    required this.top,
     required this.height,
     required this.hasData,
     required this.isHighQuality,
+    required this.chartHeight,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Stack(
         children: [
-          // Bars area
-          Expanded(
-            child: Stack(
-              children: [
-                if (hasData && height > 0.01)
-                  Positioned(
-                    // Position from bottom: bottom=0.0 means at chart bottom (6 PM), bottom=1.0 means at top (6 AM)
-                    bottom: bottom * 220, // Distance from bottom of chart area
-                    left: 4,
-                    right: 4,
-                    height: (height * 220).clamp(16.0, 220.0), // Min height for visibility
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        gradient: isHighQuality
-                            ? AppGradients.bar
-                            : LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  AppColors.accent.withOpacity(0.7),
-                                  AppColors.accent.withOpacity(0.5),
-                                ],
-                              ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: (isHighQuality ? AppColors.primary : AppColors.accent)
-                                .withOpacity(0.3),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
+          // Empty state background
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: AppColors.ring.withOpacity(0.2),
+                width: 1,
+                style: BorderStyle.solid,
+              ),
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+          // Sleep bar
+          if (hasData && height > 0.01)
+            Positioned(
+              // Position from top: top=0.0 means at chart top (6 PM), top=1.0 means at bottom (6 AM)
+              top: top * chartHeight,
+              left: 4,
+              right: 4,
+              height: (height * chartHeight).clamp(
+                24.0,
+                chartHeight,
+              ), // Min height for visibility
+              child: GestureDetector(
+                onTap: onTap,
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    gradient: isHighQuality
+                        ? LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [AppColors.primary, AppColors.accent],
+                          )
+                        : LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              AppColors.accent.withOpacity(0.7),
+                              AppColors.accent.withOpacity(0.5),
+                            ],
                           ),
-                        ],
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            (isHighQuality
+                                    ? AppColors.primary
+                                    : AppColors.accent)
+                                .withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
                       ),
-                    ),
-                  )
-                else
-                  // Show empty state with subtle indicator
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: AppColors.ring.withOpacity(0.2),
-                        width: 1,
-                        style: BorderStyle.solid,
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    ],
                   ),
-              ],
+                ),
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          // Day label
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
         ],
       ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+
+  const _DetailRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, color: AppColors.primary, size: 20),
+        const SizedBox(width: 12),
+        Text(
+          label,
+          style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+        ),
+        const Spacer(),
+        Text(
+          value,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -290,10 +476,7 @@ class _Legend extends StatelessWidget {
         Container(
           width: 10,
           height: 10,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 6),
         Text(
